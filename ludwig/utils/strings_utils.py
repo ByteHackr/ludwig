@@ -16,11 +16,11 @@
 # ==============================================================================
 import logging
 import re
+import unicodedata
 from abc import abstractmethod
 from collections import Counter
 
 import numpy as np
-import unicodedata
 
 from ludwig.utils.math_utils import int_type
 from ludwig.utils.misc import get_from_registry
@@ -74,7 +74,7 @@ def match_replace(string_to_match, list_regex):
 
 
 def load_vocabulary(vocab_file):
-    with open(vocab_file, 'r') as f:
+    with open(vocab_file, 'r', encoding='utf-8') as f:
         vocabulary = []
         for line in f:
             line = line.strip()
@@ -122,11 +122,13 @@ def create_vocabulary(
 
     vocab_set = set(vocab)
     if add_unknown:
-        if unknown_symbol not in vocab_set:
-            vocab = [unknown_symbol] + vocab
+        if unknown_symbol in vocab_set:
+            vocab.remove(unknown_symbol)
+        vocab = [unknown_symbol] + vocab
     if add_padding:
-        if padding_symbol not in vocab_set:
-            vocab = [padding_symbol] + vocab
+        if padding_symbol in vocab_set:
+            vocab.remove(padding_symbol)
+        vocab = [padding_symbol] + vocab
 
     str2idx = {unit: i for i, unit in enumerate(vocab)}
     str2freq = {unit: unit_counts.get(unit) if unit in unit_counts else 0 for

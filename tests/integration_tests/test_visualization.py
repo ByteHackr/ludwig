@@ -28,7 +28,7 @@ import subprocess
 
 import numpy as np
 
-from ludwig.experiment import experiment
+from ludwig.experiment import full_experiment
 from ludwig.utils.data_utils import load_from_file, load_json
 from tests.integration_tests.test_visualization_api import obtain_df_splits
 from tests.integration_tests.utils import generate_data
@@ -69,7 +69,7 @@ def run_experiment(input_features, output_features, **kwargs):
     }
     args.update(kwargs)
 
-    exp_dir_name = experiment(**args)
+    exp_dir_name = full_experiment(**args)
 
     return exp_dir_name
 
@@ -1579,7 +1579,7 @@ def test_visualization_calibration_1_vs_all_output_saved(csv_filename):
         figure_cnt = glob.glob(viz_pattern)
 
         assert 0 == result.returncode
-        assert 5 == len(figure_cnt)
+        assert 7 == len(figure_cnt)
 
     shutil.rmtree(exp_dir_name, ignore_errors=True)
     shutil.rmtree('results', ignore_errors=True)

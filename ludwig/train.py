@@ -21,11 +21,13 @@ from __future__ import print_function
 import argparse
 import logging
 import os
+import os.path
 import sys
 from pprint import pformat
 
 import yaml
 
+from ludwig.constants import TRAINING, VALIDATION, TEST
 from ludwig.contrib import contrib_command
 from ludwig.data.preprocessing import preprocess_for_training
 from ludwig.features.feature_registries import input_type_registry
@@ -49,7 +51,7 @@ logger = logging.getLogger(__name__)
 
 
 def full_train(
-        model_definition,
+        model_definition=None,
         model_definition_file=None,
         data_df=None,
         data_train_df=None,
@@ -96,17 +98,17 @@ def full_train(
     :param model_definition_file: The file that specifies the model definition.
            It is a yaml file.
     :type model_definition_file: filepath (str)
-    :param data_csv: A CSV file contanining the input data which is used to
+    :param data_csv: A CSV file containing the input data which is used to
            train, validate and test a model. The CSV either contains a
            split column or will be split.
     :type data_csv: filepath (str)
-    :param data_train_csv: A CSV file contanining the input data which is used
+    :param data_train_csv: A CSV file containing the input data which is used
            to train a model.
     :type data_train_csv: filepath (str)
-    :param data_validation_csv: A CSV file contanining the input data which is used
+    :param data_validation_csv: A CSV file containing the input data which is used
            to validate a model..
     :type data_validation_csv: filepath (str)
-    :param data_test_csv: A CSV file contanining the input data which is used
+    :param data_test_csv: A CSV file containing the input data which is used
            to test a model.
     :type data_test_csv: filepath (str)
     :param data_hdf5: If the dataset is in the hdf5 format, this is used instead
@@ -146,7 +148,7 @@ def full_train(
     :param skip_save_model: Disables saving model weights
            and hyperparameters each time the model
            improves. By default Ludwig saves model weights after each epoch
-           the validation measure imrpvoes, but if the model is really big
+           the validation measure improves, but if the model is really big
            that can be time consuming if you do not want to keep
            the weights and just find out what performance can a model get
            with a set of hyperparameters, use this parameter to skip it,
@@ -169,8 +171,8 @@ def full_train(
            is not needed turning it off can slightly increase the
            overall speed..
     :type skip_save_progress: Boolean
-    :param output_directory: The directory that will contanin the training
-           statistics, the saved model and the training procgress files.
+    :param output_directory: The directory that will contain the training
+           statistics, the saved model and the training progress files.
     :type output_directory: filepath (str)
     :param gpus: List of GPUs that are available for training.
     :type gpus: List
@@ -184,6 +186,18 @@ def full_train(
     :type debug: Boolean
     :returns: None
     """
+    # check for model_definition and model_definition_file
+    if model_definition is None and model_definition_file is None:
+        raise ValueError(
+            'Either model_definition of model_definition_file have to be'
+            'not None to initialize a LudwigModel'
+        )
+    if model_definition is not None and model_definition_file is not None:
+        raise ValueError(
+            'Only one between model_definition and '
+            'model_definition_file can be provided'
+        )
+
     # merge with default model definition to set defaults
     if model_definition_file is not None:
         with open(model_definition_file, 'r') as def_file:
@@ -317,6 +331,11 @@ def full_train(
                 train_set_metadata
             )
 
+    contrib_command("train_init", experiment_directory=experiment_dir_name,
+                    experiment_name=experiment_name, model_name=model_name,
+                    output_directory=output_directory,
+                    resume=model_resume_path is not None)
+
     # run the experiment
     model, result = train(
         training_set=training_set,
@@ -338,9 +357,9 @@ def full_train(
 
     train_trainset_stats, train_valisest_stats, train_testset_stats = result
     train_stats = {
-        'train': train_trainset_stats,
-        'validation': train_valisest_stats,
-        'test': train_testset_stats
+        TRAINING: train_trainset_stats,
+        VALIDATION: train_valisest_stats,
+        TEST: train_testset_stats
     }
 
     if should_close_session:
@@ -352,8 +371,8 @@ def full_train(
             save_json(training_stats_fn, train_stats)
 
     # grab the results of the model with highest validation test performance
-    validation_field = model_definition['training']['validation_field']
-    validation_measure = model_definition['training']['validation_measure']
+    validation_field = model_definition[TRAINING]['validation_field']
+    validation_measure = model_definition[TRAINING]['validation_measure']
     validation_field_result = train_valisest_stats[validation_field]
 
     best_function = get_best_function(validation_measure)
@@ -466,7 +485,8 @@ def train(
         if is_on_master():
             print_boxed('LOADING MODEL')
             logger.info('Loading model: {}\n'.format(model_load_path))
-        model, _ = load_model_and_definition(model_load_path)
+        model, _ = load_model_and_definition(model_load_path,
+                                             use_horovod=use_horovod)
     else:
         # Build model
         if is_on_master():
@@ -476,7 +496,7 @@ def train(
             model_definition['input_features'],
             model_definition['output_features'],
             model_definition['combiner'],
-            model_definition['training'],
+            model_definition[TRAINING],
             model_definition['preprocessing'],
             use_horovod=use_horovod,
             random_seed=random_seed,
@@ -497,9 +517,10 @@ def train(
         skip_save_model=skip_save_model,
         skip_save_progress=skip_save_progress,
         skip_save_log=skip_save_log,
-        gpus=gpus, gpu_fraction=gpu_fraction,
+        gpus=gpus,
+        gpu_fraction=gpu_fraction,
         random_seed=random_seed,
-        **model_definition['training']
+        **model_definition[TRAINING]
     )
 
 
@@ -777,6 +798,9 @@ def cli(sys_argv):
     logging.getLogger('ludwig').setLevel(
         logging_level_registry[args.logging_level]
     )
+    global logger
+    logger = logging.getLogger('ludwig.train')
+
     set_on_master(args.use_horovod)
 
     if is_on_master():

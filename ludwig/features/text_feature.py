@@ -56,7 +56,7 @@ class TextBaseFeature(BaseFeature):
         'padding': 'right',
         'lowercase': True,
         'missing_value_strategy': FILL_WITH_CONST,
-        'fill_value': ''
+        'fill_value': UNKNOWN_SYMBOL
     }
 
     @staticmethod
@@ -435,6 +435,7 @@ class TextOutputFeature(TextBaseFeature, SequenceOutputFeature):
             experiment_dir_name,
             skip_save_unprocessed_output=False,
     ):
+        # todo: refactor to reuse SeuuqnceOutputFeature.postprocess_results
         postprocessed = {}
         npy_filename = os.path.join(experiment_dir_name, '{}_{}.npy')
         name = output_feature['name']
@@ -444,7 +445,9 @@ class TextOutputFeature(TextBaseFeature, SequenceOutputFeature):
             preds = result[PREDICTIONS]
             if level_idx2str in metadata:
                 postprocessed[PREDICTIONS] = [
-                    [metadata[level_idx2str][token] for token in pred]
+                    [metadata[level_idx2str][token]
+                     if token < len(metadata[level_idx2str]) else UNKNOWN_SYMBOL
+                     for token in pred]
                     for pred in preds
                 ]
             else:
@@ -459,8 +462,10 @@ class TextOutputFeature(TextBaseFeature, SequenceOutputFeature):
             last_preds = result[LAST_PREDICTIONS]
             if level_idx2str in metadata:
                 postprocessed[LAST_PREDICTIONS] = [
-                    metadata[level_idx2str][last_pred] for last_pred in
-                    last_preds
+                    metadata[level_idx2str][last_pred]
+                    if last_pred < len(
+                        metadata[level_idx2str]) else UNKNOWN_SYMBOL
+                    for last_pred in last_preds
                 ]
             else:
                 postprocessed[LAST_PREDICTIONS] = last_preds
@@ -484,12 +489,16 @@ class TextOutputFeature(TextBaseFeature, SequenceOutputFeature):
                     probs = np.amax(probs, axis=-1)
                     prob = np.prod(probs, axis=-1)
 
-                postprocessed[PROBABILITIES] = probs
-                postprocessed['probability'] = prob
+                # commenting probabilities out because usually it is huge:
+                # dataset x length x classes
+                # todo: add a mechanism for letting the user decide to save it
+                # postprocessed[PROBABILITIES] = probs
+                postprocessed[PROBABILITY] = prob
 
                 if not skip_save_unprocessed_output:
-                    np.save(npy_filename.format(name, PROBABILITIES), probs)
-                    np.save(npy_filename.format(name, 'probability'), prob)
+                    # commenting probabilities out, see comment above
+                    # np.save(npy_filename.format(name, PROBABILITIES), probs)
+                    np.save(npy_filename.format(name, PROBABILITY), prob)
 
             del result[PROBABILITIES]
 

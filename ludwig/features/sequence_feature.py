@@ -68,7 +68,7 @@ class SequenceBaseFeature(BaseFeature):
         'lowercase': False,
         'vocab_file': None,
         'missing_value_strategy': FILL_WITH_CONST,
-        'fill_value': ''
+        'fill_value': UNKNOWN_SYMBOL
     }
 
     @staticmethod
@@ -317,7 +317,10 @@ class SequenceOutputFeature(SequenceBaseFeature, OutputFeature):
         output_tensors[TRAIN_MEAN_LOSS + '_' + feature_name] = train_mean_loss
         output_tensors[EVAL_LOSS + '_' + feature_name] = eval_loss
 
-        tf.compat.v1.summary.scalar(TRAIN_MEAN_LOSS + '_' + feature_name, train_mean_loss)
+        tf.compat.v1.summary.scalar(
+            'batch_train_mean_loss_{}'.format(self.name),
+            train_mean_loss,
+        )
 
         # ================ Measures ================
         (
@@ -352,19 +355,19 @@ class SequenceOutputFeature(SequenceBaseFeature, OutputFeature):
 
         if 'sampled' not in self.loss['type']:
             tf.compat.v1.summary.scalar(
-                'train_batch_last_accuracy_{}'.format(feature_name),
+                'batch_train_last_accuracy_{}'.format(feature_name),
                 last_accuracy
             )
             tf.compat.v1.summary.scalar(
-                'train_batch_token_accuracy_{}'.format(feature_name),
+                'batch_train_token_accuracy_{}'.format(feature_name),
                 token_accuracy
             )
             tf.compat.v1.summary.scalar(
-                'train_batch_rowwise_accuracy_{}'.format(feature_name),
+                'batch_train_rowwise_accuracy_{}'.format(feature_name),
                 rowwise_accuracy
             )
             tf.compat.v1.summary.scalar(
-                'train_batch_mean_edit_distance_{}'.format(feature_name),
+                'batch_train_mean_edit_distance_{}'.format(feature_name),
                 mean_edit_distance
             )
 
@@ -745,7 +748,9 @@ class SequenceOutputFeature(SequenceBaseFeature, OutputFeature):
             preds = result[PREDICTIONS]
             if 'idx2str' in metadata:
                 postprocessed[PREDICTIONS] = [
-                    [metadata['idx2str'][token] for token in pred]
+                    [metadata['idx2str'][token]
+                     if token < len(metadata['idx2str']) else UNKNOWN_SYMBOL
+                     for token in pred]
                     for pred in preds
                 ]
             else:
@@ -760,7 +765,9 @@ class SequenceOutputFeature(SequenceBaseFeature, OutputFeature):
             last_preds = result[LAST_PREDICTIONS]
             if 'idx2str' in metadata:
                 postprocessed[LAST_PREDICTIONS] = [
-                    metadata['idx2str'][last_pred] for last_pred in last_preds
+                    metadata['idx2str'][last_pred]
+                    if last_pred < len(metadata['idx2str']) else UNKNOWN_SYMBOL
+                    for last_pred in last_preds
                 ]
             else:
                 postprocessed[LAST_PREDICTIONS] = last_preds
@@ -786,12 +793,16 @@ class SequenceOutputFeature(SequenceBaseFeature, OutputFeature):
                         probs = np.amax(probs, axis=-1)
                     prob = np.prod(probs, axis=-1)
 
-                postprocessed[PROBABILITIES] = probs
-                postprocessed['probability'] = prob
+                # commenting probabilities out because usually it is huge:
+                # dataset x length x classes
+                # todo: add a mechanism for letting the user decide to save it
+                # postprocessed[PROBABILITIES] = probs
+                postprocessed[PROBABILITY] = prob
 
                 if not skip_save_unprocessed_output:
-                    np.save(npy_filename.format(name, PROBABILITIES), probs)
-                    np.save(npy_filename.format(name, 'probability'), prob)
+                    # commenting probabilities out, see comment above
+                    # np.save(npy_filename.format(name, PROBABILITIES), probs)
+                    np.save(npy_filename.format(name, PROBABILITY), prob)
 
             del result[PROBABILITIES]
 

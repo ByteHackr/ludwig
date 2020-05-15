@@ -29,7 +29,7 @@ from ludwig.features.feature_utils import set_str_to_idx
 from ludwig.models.modules.embedding_modules import EmbedSparse
 from ludwig.models.modules.initializer_modules import get_initializer
 from ludwig.utils.misc import set_default_value
-from ludwig.utils.strings_utils import create_vocabulary
+from ludwig.utils.strings_utils import create_vocabulary, UNKNOWN_SYMBOL
 
 logger = logging.getLogger(__name__)
 
@@ -37,14 +37,14 @@ logger = logging.getLogger(__name__)
 class SetBaseFeature(BaseFeature):
     def __init__(self, feature):
         super().__init__(feature)
-        self.type = IMAGE
+        self.type = SET
 
     preprocessing_defaults = {
         'tokenizer': 'space',
         'most_common': 10000,
         'lowercase': False,
         'missing_value_strategy': FILL_WITH_CONST,
-        'fill_value': ''
+        'fill_value': UNKNOWN_SYMBOL
     }
 
     @staticmethod
@@ -132,7 +132,7 @@ class SetInputFeature(SetBaseFeature, InputFeature):
     def _get_input_placeholder(self):
         # None is for dealing with variable batch size
         return tf.compat.v1.placeholder(
-            tf.int32,
+            tf.bool,
             shape=[None, len(self.vocab)],
             name=self.name
         )
@@ -268,8 +268,9 @@ class SetOutputFeature(SetBaseFeature, OutputFeature):
             axis=1
         )
         jaccard_index = intersection / union
+        mean_jaccard_index = tf.reduce_mean(jaccard_index)
 
-        return jaccard_index
+        return jaccard_index, mean_jaccard_index
 
     def build_output(
             self,
@@ -295,20 +296,26 @@ class SetOutputFeature(SetBaseFeature, OutputFeature):
         )
         predictions, probabilities, logits = ppl
 
-        jaccard_index = self._get_measures(targets, predictions)
+        # ================ Measures ================
+        jaccard_index, mean_jaccard = self._get_measures(targets, predictions)
 
         output_tensors[PREDICTIONS + '_' + self.name] = predictions
         output_tensors[PROBABILITIES + '_' + self.name] = probabilities
         output_tensors[JACCARD + '_' + self.name] = jaccard_index
 
-        # ================ Loss (Binary Cross Entropy) ================
+        tf.compat.v1.summary.scalar(
+            'batch_train_mean_jaccard_{}'.format(self.name),
+            mean_jaccard
+        )
+
+        # ================ Loss ================
         train_mean_loss, eval_loss = self._get_loss(targets, logits)
 
         output_tensors[EVAL_LOSS + '_' + self.name] = eval_loss
         output_tensors[TRAIN_MEAN_LOSS + '_' + self.name] = train_mean_loss
 
         tf.compat.v1.summary.scalar(
-            'train_mean_loss_{}'.format(self.name),
+            'batch_train_mean_loss_{}'.format(self.name),
             train_mean_loss
         )
 
@@ -394,11 +401,11 @@ class SetOutputFeature(SetBaseFeature, OutputFeature):
             prob = [[prob for prob in prob_set if
                      prob >= output_feature['threshold']] for prob_set in probs]
             postprocessed[PROBABILITIES] = probs
-            postprocessed['probability'] = prob
+            postprocessed[PROBABILITY] = prob
 
             if not skip_save_unprocessed_output:
                 np.save(npy_filename.format(name, PROBABILITIES), probs)
-                np.save(npy_filename.format(name, 'probability'), probs)
+                np.save(npy_filename.format(name, PROBABILITY), probs)
 
             del result[PROBABILITIES]
 

@@ -82,7 +82,8 @@ class Experiment:
         # probabilities need to be list of lists containing each row data
         # from the probability columns
         # ref: https://uber.github.io/ludwig/api/#test - Return
-        self.probability = self.test_stats_full[0].iloc[:, 2:].values
+        num_probs = self.output_features[0]['vocab_size']
+        self.probability = self.test_stats_full[0].iloc[:, 1:(num_probs+2)].values
         self.ground_truth_metadata = self.model.train_set_metadata
         target_predictions = test_df[self.output_feature_name]
         self.ground_truth = np.asarray([
@@ -714,7 +715,7 @@ def test_calibration_1_vs_all_vis_api(csv_filename):
             file_format=viz_output
         )
         figure_cnt = glob.glob(vis_output_pattern_pdf)
-        assert 5 == len(figure_cnt)
+        assert 7 == len(figure_cnt)
     shutil.rmtree(experiment.model.exp_dir_name, ignore_errors=True)
 
 

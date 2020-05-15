@@ -451,15 +451,15 @@ class CategoryOutputFeature(CategoryBaseFeature, OutputFeature):
 
         if 'sampled' not in self.loss['type']:
             tf.compat.v1.summary.scalar(
-                'train_batch_accuracy_{}'.format(self.name),
+                'batch_train_mean_accuracy_{}'.format(self.name),
                 accuracy
             )
             tf.compat.v1.summary.scalar(
-                'train_batch_mean_hits_at_k_{}'.format(self.name),
+                'batch_train_mean_hits_at_k_{}'.format(self.name),
                 mean_hits_at_k
             )
 
-        # ================ Loss (Cross Entropy) ================
+        # ================ Loss ================
         train_mean_loss, eval_loss = self._get_loss(
             targets,
             hidden,
@@ -473,7 +473,7 @@ class CategoryOutputFeature(CategoryBaseFeature, OutputFeature):
         output_tensors[TRAIN_MEAN_LOSS + '_' + self.name] = train_mean_loss
 
         tf.compat.v1.summary.scalar(
-            'train_mean_loss_{}'.format(self.name),
+            'batch_train_mean_loss_{}'.format(self.name),
             train_mean_loss
         )
 
@@ -506,6 +506,28 @@ class CategoryOutputFeature(CategoryBaseFeature, OutputFeature):
                         output_feature['name']
                     )
                 )
+
+        if isinstance(output_feature[LOSS]['class_weights'], dict):
+            if (
+                    feature_metadata['str2idx'].keys() !=
+                    output_feature[LOSS]['class_weights'].keys()
+            ):
+                raise ValueError(
+                    'The class_weights keys ({}) are not compatible with '
+                    'the classes ({}) of feature {}. '
+                    'Check the metadata JSON file to see the classes '
+                    'and consider there needs to be a weight '
+                    'for the <UNK> class too.'.format(
+                        output_feature[LOSS]['class_weights'].keys(),
+                        feature_metadata['str2idx'].keys(),
+                        output_feature['name']
+                    )
+                )
+            else:
+                class_weights = output_feature[LOSS]['class_weights']
+                idx2str = feature_metadata['idx2str']
+                class_weights_list = [class_weights[s] for s in idx2str]
+                output_feature[LOSS]['class_weights'] = class_weights_list
 
         if output_feature[LOSS]['class_similarities_temperature'] > 0:
             if 'class_similarities' in output_feature[LOSS]:
@@ -633,11 +655,11 @@ class CategoryOutputFeature(CategoryBaseFeature, OutputFeature):
             probs = result[PROBABILITIES]
             prob = np.amax(probs, axis=1)
             postprocessed[PROBABILITIES] = probs
-            postprocessed['probability'] = prob
+            postprocessed[PROBABILITY] = prob
 
             if not skip_save_unprocessed_output:
                 np.save(npy_filename.format(name, PROBABILITIES), probs)
-                np.save(npy_filename.format(name, 'probability'), probs)
+                np.save(npy_filename.format(name, PROBABILITY), probs)
 
             del result[PROBABILITIES]
 

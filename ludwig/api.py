@@ -33,6 +33,7 @@ import os
 import sys
 
 import ludwig.contrib
+from ludwig.constants import TRAINING
 
 ludwig.contrib.contrib_import()
 
@@ -45,6 +46,8 @@ from ludwig.data.preprocessing import build_data
 from ludwig.data.preprocessing import build_dataset
 from ludwig.data.preprocessing import load_metadata
 from ludwig.data.preprocessing import replace_text_feature_level
+from ludwig.experiment import \
+    kfold_cross_validate as experiment_kfold_cross_validate
 from ludwig.globals import MODEL_HYPERPARAMETERS_FILE_NAME
 from ludwig.globals import MODEL_WEIGHTS_FILE_NAME
 from ludwig.globals import TRAIN_SET_METADATA_FILE_NAME
@@ -54,6 +57,7 @@ from ludwig.models.model import load_model_and_definition
 from ludwig.predict import calculate_overall_stats
 from ludwig.train import full_train
 from ludwig.train import update_model_definition_with_metadata
+from ludwig.utils.data_utils import override_in_memory_flag
 from ludwig.utils.data_utils import read_csv
 from ludwig.utils.data_utils import save_json
 from ludwig.utils.defaults import default_random_seed
@@ -143,10 +147,11 @@ class LudwigModel:
             model_definition_file=None,
             logging_level=logging.ERROR
     ):
+        # check for model_definition and model_definition_file
         if model_definition is None and model_definition_file is None:
             raise ValueError(
-                'Either model_definition of model_definition_file have not None'
-                ' to initialize a LudwigModel'
+                'Either model_definition of model_definition_file have to be'
+                'not None to initialize a LudwigModel'
             )
         if model_definition is not None and model_definition_file is not None:
             raise ValueError(
@@ -344,7 +349,7 @@ class LudwigModel:
             debug=False,
             **kwargs
     ):
-        """This function is used to perform a full training of the model on the 
+        """This function is used to perform a full training of the model on the
            specified dataset.
 
         # Inputs
@@ -485,7 +490,6 @@ class LudwigModel:
 
         :return: (dict) a dictionary containing training statistics for each
         output feature containing loss and measures values for each epoch.
-
         """
 
         if data_df is None and data_dict is not None:
@@ -595,7 +599,7 @@ class LudwigModel:
             self.model_definition['input_features'],
             self.model_definition['output_features'],
             self.model_definition['combiner'],
-            self.model_definition['training'],
+            self.model_definition[TRAINING],
             self.model_definition['preprocessing'],
             random_seed=random_seed,
             debug=debug
@@ -619,22 +623,22 @@ class LudwigModel:
             gpus=None,
             gpu_fraction=1,
     ):
-        """This function is used to perform one epoch of training of the model 
+        """This function is used to perform one epoch of training of the model
         on the specified dataset.
 
         # Inputs
 
         :param data_df: (DataFrame) dataframe containing data.
         :param data_csv: (string) input data CSV file.
-        :param data_dict: (dict) input data dictionary. It is expected to 
-               contain one key for each field and the values have to be lists of 
-               the same length. Each index in the lists corresponds to one 
-               datapoint. For example a data set consisting of two datapoints 
-               with a text and a class may be provided as the following dict 
+        :param data_dict: (dict) input data dictionary. It is expected to
+               contain one key for each field and the values have to be lists of
+               the same length. Each index in the lists corresponds to one
+               datapoint. For example a data set consisting of two datapoints
+               with a text and a class may be provided as the following dict
                ``{'text_field_name': ['text of the first datapoint', text of the
-               second datapoint'], 'class_filed_name': ['class_datapoints_1', 
+               second datapoint'], 'class_filed_name': ['class_datapoints_1',
                'class_datapoints_2']}`.
-        :param batch_size: (int) the batch size to use for training. By default 
+        :param batch_size: (int) the batch size to use for training. By default
                it's the one specified in the model definition.
         :param learning_rate: (float) the learning rate to use for training. By
                default the values is the one specified in the model definition.
@@ -674,17 +678,17 @@ class LudwigModel:
             data_df.csv = data_csv
 
         if batch_size is None:
-            batch_size = self.model_definition['training']['batch_size']
+            batch_size = self.model_definition[TRAINING]['batch_size']
         if learning_rate is None:
-            learning_rate = self.model_definition['training']['learning_rate']
+            learning_rate = self.model_definition[TRAINING]['learning_rate']
         if regularization_lambda is None:
-            regularization_lambda = self.model_definition['training'][
+            regularization_lambda = self.model_definition[TRAINING][
                 'regularization_lambda'
             ]
         if dropout_rate is None:
-            dropout_rate = self.model_definition['training']['dropout_rate'],
+            dropout_rate = self.model_definition[TRAINING]['dropout_rate'],
         if bucketing_field is None:
-            bucketing_field = self.model_definition['training'][
+            bucketing_field = self.model_definition[TRAINING][
                 'bucketing_field'
             ]
 
@@ -751,6 +755,15 @@ class LudwigModel:
         else:
             output_features = []
         features_to_load += output_features
+
+        num_overrides = override_in_memory_flag(
+            self.model_definition['input_features'],
+            True
+        )
+        if num_overrides > 0:
+            logger.warning(
+                'Using in_memory = False is not supported for Ludwig API.'
+            )
 
         preprocessed_data = build_data(
             data_df,
@@ -987,6 +1000,54 @@ class LudwigModel:
         )
 
         return predictions, test_stats
+
+
+def kfold_cross_validate(
+        num_folds,
+        model_definition=None,
+        model_definition_file=None,
+        data_csv=None,
+        output_directory='results',
+        random_seed=default_random_seed,
+        **kwargs
+):
+    """Performs k-fold cross validation and returns result data structures.
+
+
+    # Inputs
+    
+    :param num_folds: (int) number of folds to create for the cross-validation
+    :param model_definition: (dict, default: None) a dictionary containing
+           information needed to build a model. Refer to the
+           [User Guide](http://ludwig.ai/user_guide/#model-definition)
+           for details.
+    :param model_definition_file: (string, optional, default: `None`) path to
+           a YAML file containing the model definition. If available it will be
+           used instead of the model_definition dict.
+    :param data_csv: (dataframe, default: None)
+    :param data_csv: (string, default: None)
+    :param output_directory: (string, default: 'results')
+    :param random_seed: (int) Random seed used k-fold splits.
+
+    # Return
+
+    :return: (tuple(kfold_cv_stats, kfold_split_indices), dict) a tuple of
+            dictionaries `kfold_cv_stats`: contains metrics from cv run.
+             `kfold_split_indices`: indices to split training data into
+             training fold and test fold.
+    """
+
+    (kfold_cv_stats,
+     kfold_split_indices) = experiment_kfold_cross_validate(
+        num_folds,
+        model_definition=model_definition,
+        model_definition_file=model_definition_file,
+        data_csv=data_csv,
+        output_directory=output_directory,
+        random_seed=random_seed
+    )
+
+    return kfold_cv_stats, kfold_split_indices
 
 
 def test_train(

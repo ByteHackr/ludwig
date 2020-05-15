@@ -35,6 +35,7 @@ from ludwig.utils.metrics_utils import roc_auc_score
 from ludwig.utils.metrics_utils import roc_curve
 from ludwig.utils.misc import set_default_value
 from ludwig.utils.misc import set_default_values
+from ludwig.utils.strings_utils import str2bool
 
 logger = logging.getLogger(__name__)
 
@@ -61,8 +62,10 @@ class BinaryBaseFeature(BaseFeature):
             metadata,
             preprocessing_parameters=None
     ):
-        data[feature['name']] = dataset_df[feature['name']].astype(
-            np.bool_).values
+        column = dataset_df[feature['name']]
+        if column.dtype == object:
+            column = column.map(str2bool)
+        data[feature['name']] = column.astype(np.bool_).values
 
 
 class BinaryInputFeature(BinaryBaseFeature, InputFeature):
@@ -258,7 +261,12 @@ class BinaryOutputFeature(BinaryBaseFeature, OutputFeature):
 
         output_tensors[ACCURACY + '_' + self.name] = accuracy
 
-        # ================ Loss (Binary Cross Entropy) ================
+        tf.compat.v1.summary.scalar(
+            'batch_train_accuracy_{}'.format(self.name),
+            accuracy
+        )
+
+        # ================ Loss ================
         train_mean_loss, eval_loss = self._get_loss(
             targets,
             logits,
@@ -269,10 +277,9 @@ class BinaryOutputFeature(BinaryBaseFeature, OutputFeature):
         output_tensors[TRAIN_MEAN_LOSS + '_' + self.name] = train_mean_loss
 
         tf.compat.v1.summary.scalar(
-            'train_mean_loss_{}'.format(self.name),
+            'batch_train_mean_loss_{}'.format(self.name),
             train_mean_loss
         )
-
         return train_mean_loss, eval_loss, output_tensors
 
     default_validation_measure = ACCURACY
@@ -407,9 +414,10 @@ class BinaryOutputFeature(BinaryBaseFeature, OutputFeature):
 
     @staticmethod
     def populate_defaults(output_feature):
-        set_default_value(
-            output_feature,
-            LOSS,
+        # If Loss is not defined, set an empty dictionary
+        set_default_value(output_feature, LOSS, {})
+        set_default_values(
+            output_feature[LOSS],
             {
                 'robust_lambda': 0,
                 'confidence_penalty': 0,

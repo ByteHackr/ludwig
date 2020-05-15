@@ -22,8 +22,13 @@ import argparse
 import logging
 import os
 import sys
+import tempfile
+
+import numpy as np
+import pandas as pd
 import yaml
 
+from ludwig.constants import TRAINING
 from ludwig.contrib import contrib_command
 from ludwig.data.postprocessing import postprocess
 from ludwig.globals import LUDWIG_VERSION, set_on_master, is_on_master
@@ -32,10 +37,10 @@ from ludwig.predict import print_test_results
 from ludwig.predict import save_prediction_outputs
 from ludwig.predict import save_test_statistics
 from ludwig.train import full_train
-from ludwig.utils.defaults import default_random_seed
+from ludwig.utils.data_utils import save_json, generate_kfold_splits
+from ludwig.utils.defaults import default_random_seed, merge_with_defaults
 from ludwig.utils.print_utils import logging_level_registry
 from ludwig.utils.print_utils import print_ludwig
-
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +48,126 @@ logger = logging.getLogger(__name__)
 def experiment(
         model_definition,
         model_definition_file=None,
+        data_df=None,
+        data_train_df=None,
+        data_validation_df=None,
+        data_test_df=None,
+        data_csv=None,
+        data_train_csv=None,
+        data_validation_csv=None,
+        data_test_csv=None,
+        data_hdf5=None,
+        data_train_hdf5=None,
+        data_validation_hdf5=None,
+        data_test_hdf5=None,
+        train_set_metadata_json=None,
+        experiment_name='experiment',
+        model_name='run',
+        model_load_path=None,
+        model_resume_path=None,
+        skip_save_training_description=False,
+        skip_save_training_statistics=False,
+        skip_save_model=False,
+        skip_save_progress=False,
+        skip_save_log=False,
+        skip_save_processed_input=False,
+        skip_save_unprocessed_output=False,  # skipcq: PYL-W0613
+        skip_save_test_predictions=False,  # skipcq: PYL-W0613
+        skip_save_test_statistics=False,  # skipcq: PYL-W0613
+        output_directory='results',
+        should_close_session=False,
+        gpus=None,
+        gpu_fraction=1.0,
+        use_horovod=False,
+        random_seed=default_random_seed,
+        debug=False,
+        **kwargs
+):
+    (
+        model,
+        preprocessed_data,
+        experiment_dir_name,
+        train_stats,
+        model_definition
+    ) = full_train(
+        model_definition,
+        model_definition_file=model_definition_file,
+        data_df=data_df,
+        data_train_df=data_train_df,
+        data_validation_df=data_validation_df,
+        data_test_df=data_test_df,
+        data_csv=data_csv,
+        data_train_csv=data_train_csv,
+        data_validation_csv=data_validation_csv,
+        data_test_csv=data_test_csv,
+        data_hdf5=data_hdf5,
+        data_train_hdf5=data_train_hdf5,
+        data_validation_hdf5=data_validation_hdf5,
+        data_test_hdf5=data_test_hdf5,
+        train_set_metadata_json=train_set_metadata_json,
+        experiment_name=experiment_name,
+        model_name=model_name,
+        model_load_path=model_load_path,
+        model_resume_path=model_resume_path,
+        skip_save_training_description=skip_save_training_description,
+        skip_save_training_statistics=skip_save_training_statistics,
+        skip_save_model=skip_save_model,
+        skip_save_progress=skip_save_progress,
+        skip_save_log=skip_save_log,
+        skip_save_processed_input=skip_save_processed_input,
+        output_directory=output_directory,
+        should_close_session=should_close_session,
+        gpus=gpus,
+        gpu_fraction=gpu_fraction,
+        use_horovod=use_horovod,
+        random_seed=random_seed,
+        debug=debug,
+        **kwargs
+    )
+
+    (_,  # training_set
+     _,  # validation_set
+     test_set,
+     train_set_metadata) = preprocessed_data
+
+    if test_set is not None:
+        if model_definition[TRAINING]['eval_batch_size'] > 0:
+            batch_size = model_definition[TRAINING]['eval_batch_size']
+        else:
+            batch_size = model_definition[TRAINING]['batch_size']
+
+        # predict
+        test_results = predict(
+            test_set,
+            train_set_metadata,
+            model,
+            model_definition,
+            batch_size,
+            evaluate_performance=True,
+            gpus=gpus,
+            gpu_fraction=gpu_fraction,
+            debug=debug
+        )
+    else:
+        test_results = None
+
+    return (
+        model,
+        preprocessed_data,
+        experiment_dir_name,
+        train_stats,
+        model_definition,
+        test_results
+    )
+
+
+def full_experiment(
+        model_definition,
+        model_definition_file=None,
+        data_df=None,
+        data_train_df=None,
+        data_validation_df=None,
+        data_test_df=None,
         data_csv=None,
         data_train_csv=None,
         data_validation_csv=None,
@@ -181,15 +306,21 @@ def experiment(
     :param debug: If true turns on tfdbg with inf_or_nan checks.
     :type debug: Boolean
     """
+
     (
         model,
         preprocessed_data,
         experiment_dir_name,
-        _,
-        model_definition
-    ) = full_train(
+        _,  # train_stats
+        model_definition,
+        test_results
+    ) = experiment(
         model_definition,
         model_definition_file=model_definition_file,
+        data_df=data_df,
+        data_train_df=data_train_df,
+        data_validation_df=data_validation_df,
+        data_test_df=data_test_df,
         data_csv=data_csv,
         data_train_csv=data_train_csv,
         data_validation_csv=data_validation_csv,
@@ -225,24 +356,6 @@ def experiment(
      train_set_metadata) = preprocessed_data
 
     if test_set is not None:
-        if model_definition['training']['eval_batch_size'] > 0:
-            batch_size = model_definition['training']['eval_batch_size']
-        else:
-            batch_size = model_definition['training']['batch_size']
-
-        # predict
-        test_results = predict(
-            test_set,
-            train_set_metadata,
-            model,
-            model_definition,
-            batch_size,
-            evaluate_performance=True,
-            gpus=gpus,
-            gpu_fraction=gpu_fraction,
-            debug=debug
-        )
-
         # check if we need to create the output dir
         if is_on_master():
             if not (
@@ -271,6 +384,7 @@ def experiment(
                 )
             if not skip_save_test_statistics:
                 save_test_statistics(test_results, experiment_dir_name)
+
     model.close_session()
 
     if is_on_master():
@@ -280,6 +394,184 @@ def experiment(
 
     contrib_command("experiment_save", experiment_dir_name)
     return experiment_dir_name
+
+
+def kfold_cross_validate(
+        num_folds,
+        model_definition=None,
+        model_definition_file=None,
+        data_csv=None,
+        output_directory='results',
+        random_seed=default_random_seed,
+        **kwargs
+):
+    # check for k_fold
+    if num_folds is None:
+        raise ValueError(
+            'k_fold parameter must be specified'
+        )
+
+    # check for model_definition and model_definition_file
+    if model_definition is None and model_definition_file is None:
+        raise ValueError(
+            'Either model_definition of model_definition_file have to be'
+            'not None to initialize a LudwigModel'
+        )
+    if model_definition is not None and model_definition_file is not None:
+        raise ValueError(
+            'Only one between model_definition and '
+            'model_definition_file can be provided'
+        )
+
+    logger.info('starting {:d}-fold cross validation'.format(num_folds))
+
+    # extract out model definition for use
+    if model_definition_file is not None:
+        with open(model_definition_file, 'r') as def_file:
+            model_definition = \
+                merge_with_defaults(yaml.safe_load(def_file))
+
+    # create output_directory if not available
+    if not os.path.isdir(output_directory):
+        os.mkdir(output_directory)
+
+    # read in data to split for the folds
+    data_df = pd.read_csv(data_csv)
+
+    # place each fold in a separate directory
+    data_dir = os.path.dirname(data_csv)
+
+    kfold_cv_stats = {}
+    kfold_split_indices = {}
+
+    for train_indices, test_indices, fold_num in \
+            generate_kfold_splits(data_df, num_folds, random_seed):
+        with tempfile.TemporaryDirectory(dir=data_dir) as temp_dir_name:
+            curr_train_df = data_df.iloc[train_indices]
+            curr_test_df = data_df.iloc[test_indices]
+
+            kfold_split_indices['fold_' + str(fold_num)] = {
+                'training_indices': train_indices,
+                'test_indices': test_indices
+            }
+
+            # train and validate model on this fold
+            logger.info("training on fold {:d}".format(fold_num))
+            (
+                _,  # model
+                _,  # preprocessed_data
+                _,  # experiment_dir_name
+                train_stats,
+                model_definition,
+                test_results
+            ) = experiment(
+                model_definition,
+                data_train_df=curr_train_df,
+                data_test_df=curr_test_df,
+                experiment_name='cross_validation',
+                model_name='fold_' + str(fold_num),
+                output_directory=os.path.join(temp_dir_name, 'results')
+            )
+
+            # augment the training statistics with scoring metric from
+            # the hold out fold
+            train_stats['fold_metric'] = {}
+            for metric_category in test_results:
+                train_stats['fold_metric'][metric_category] = {}
+                for metric in test_results[metric_category]:
+                    train_stats['fold_metric'][metric_category][metric] = \
+                        test_results[metric_category][metric]
+
+            # collect training statistics for this fold
+            kfold_cv_stats['fold_' + str(fold_num)] = train_stats
+
+    # consolidate raw fold metrics across all folds
+    raw_kfold_stats = {}
+    for fold_name in kfold_cv_stats:
+        for category in kfold_cv_stats[fold_name]['fold_metric']:
+            if category not in raw_kfold_stats:
+                raw_kfold_stats[category] = {}
+            category_stats = \
+                kfold_cv_stats[fold_name]['fold_metric'][category]
+            for metric in category_stats:
+                if metric not in {
+                    'predictions',
+                    'probabilities',
+                    'confusion_matrix',
+                    'overall_stats',
+                    'per_class_stats',
+                    'roc_curve',
+                    'precision_recall_curve'
+                }:
+                    if metric not in raw_kfold_stats[category]:
+                        raw_kfold_stats[category][metric] = []
+                    raw_kfold_stats[category][metric] \
+                        .append(category_stats[metric])
+
+    # calculate overall kfold statistics
+    overall_kfold_stats = {}
+    for category in raw_kfold_stats:
+        overall_kfold_stats[category] = {}
+        for metric in raw_kfold_stats[category]:
+            mean = np.mean(raw_kfold_stats[category][metric])
+            std = np.std(raw_kfold_stats[category][metric])
+            overall_kfold_stats[category][metric + '_mean'] = mean
+            overall_kfold_stats[category][metric + '_std'] = std
+
+    kfold_cv_stats['overall'] = overall_kfold_stats
+
+    logger.info('completed {:d}-fold cross validation'.format(num_folds))
+
+    return kfold_cv_stats, kfold_split_indices
+
+
+def full_kfold_cross_validate(
+        k_fold,
+        model_definition=None,
+        model_definition_file=None,
+        data_csv=None,
+        output_directory='results',
+        random_seed=default_random_seed,
+        skip_save_k_fold_split_indices=False,
+        **kwargs
+):
+    """Wrapper function to performs k-fold cross validation.
+
+    # Inputs
+    :param k_fold: (int) number of folds to create for the cross-validation
+    :param model_definition: (dict, default: None) a dictionary containing
+            information needed to build a model. Refer to the [User Guide]
+           (http://ludwig.ai/user_guide/#model-definition) for details.
+    :param model_definition_file: (string, optional, default: `None`) path to
+           a YAML file containing the model definition. If available it will be
+           used instead of the model_definition dict.
+    :param data_csv: (string, default: None)
+    :param output_directory: (string, default: 'results')
+    :param random_seed: (int) Random seed used k-fold splits.
+    :param skip_save_k_fold_split_indices: (boolean, default: False) Disables
+            saving k-fold split indices
+
+    :return: None
+    """
+
+    (kfold_cv_stats,
+     kfold_split_indices) = kfold_cross_validate(
+        k_fold,
+        model_definition=model_definition,
+        model_definition_file=model_definition_file,
+        data_csv=data_csv,
+        output_directory=output_directory,
+        random_seed=random_seed
+    )
+
+    # save k-fold cv statistics
+    save_json(os.path.join(output_directory, 'kfold_training_statistics.json'),
+              kfold_cv_stats)
+
+    # save k-fold split indices
+    if not skip_save_k_fold_split_indices:
+        save_json(os.path.join(output_directory, 'kfold_split_indices.json'),
+                  kfold_split_indices)
 
 
 def cli(sys_argv):
@@ -376,6 +668,26 @@ def cli(sys_argv):
         help='skips saving intermediate NPY output files',
         action='store_true',
         default=False
+    )
+
+    # -----------------
+    # K-fold parameters
+    # -----------------
+    parser.add_argument(
+        '-kf',
+        '--k_fold',
+        type=int,
+        default=None,
+        help='number of folds for a k-fold cross validation run '
+    )
+    parser.add_argument(
+        '-skfsi',
+        '--skip_save_k_fold_split_indices',
+        action='store_true',
+        default=False,
+        help='disables saving indices generated to split training data set '
+             'for the k-fold cross validation run, but if it is not needed '
+             'turning it off can slightly increase the overall speed'
     )
 
     # ----------------
@@ -520,13 +832,18 @@ def cli(sys_argv):
     logging.getLogger('ludwig').setLevel(
         logging_level_registry[args.logging_level]
     )
+    global logger
+    logger = logging.getLogger('ludwig.experiment')
 
     set_on_master(args.use_horovod)
 
     if is_on_master():
         print_ludwig('Experiment', LUDWIG_VERSION)
 
-    experiment(**vars(args))
+    if args.k_fold is None:
+        full_experiment(**vars(args))
+    else:
+        full_kfold_cross_validate(**vars(args))
 
 
 if __name__ == '__main__':
